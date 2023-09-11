@@ -22,3 +22,28 @@ def dot_product_attention(tensor_A, tensor_B):
 
     #return attended_features_A
     return attention_weights
+
+def combine_masks_to_segmentation(masks):
+    """
+    Combines binary masks for each class into a segmentation map.
+
+    Args:
+        masks (Tensor): Tensor of masks with dimensions [batch_size, num_classes, H, W],
+                        where each channel contains a binary mask for a class.
+
+    Returns:
+        segmentation_map (Tensor): Combined segmentation map with dimensions [batch_size, H, W],
+                                   where each pixel contains the class label (1, 2, ..., num_classes).
+    """
+    # Get the number of classes and batch size
+    batch_size, num_classes, H, W = masks.size()
+    
+    # Initialize an empty tensor for the segmentation map
+    segmentation_map = torch.zeros(batch_size, H, W, device = 'cuda')
+    
+    # Iterate over each class and assign class labels to pixels in the segmentation map
+    for class_idx in range(num_classes):
+        class_mask = masks[:, class_idx, :, :]
+        segmentation_map += class_mask * (class_idx)  # Class labels start from 1
+    
+    return segmentation_map

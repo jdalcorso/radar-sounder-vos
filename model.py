@@ -17,23 +17,20 @@ class RGVOS(nn.Module):
         encoding_layers = list(self.encoder.children())[:-2]
         self.encoder = nn.Sequential(*encoding_layers)
 
-        # Modify stride to (1, 1) everywhere in encoder layers
+        # Modify stride to (1, 1) everywhere in encoder layer
+        # When modifying padding, one should also modify conv2 padding
         for layer in self.encoder.children():
             if isinstance(layer, nn.Sequential):
                 for sublayer in layer:
                     if isinstance(sublayer, BasicBlock):
                         sublayer.conv1.stride = (1,1)
+                        sublayer.conv1.padding_mode = 'replicate'
+                        sublayer.conv2.padding_mode = 'replicate'
                         if isinstance(sublayer.downsample, nn.Sequential):
                             sublayer.downsample[0].stride = (1,1)
-        
-        #print(list(self.encoder.children()))
+                            sublayer.downsample[0].padding_mode = 'replicate'
 
-        # Freeze all layers in encoder except self.fc0
-        #for param in self.encoder.parameters():
-        #    param.requires_grad = False
-        # Unfreeze self.fc0
-        for param in self.fc0.parameters():
-            param.requires_grad = True
+        #print(list(self.encoder.children()))
 
     def forward(self,v):
 
@@ -42,8 +39,8 @@ class RGVOS(nn.Module):
         #y = self.fc0(v[:,:,1,:,:])
 
         # repeat to get 3 channels
-        x = v[:,:,0,:,:].repeat([1,3,1,1])
-        y = v[:,:,1,:,:].repeat([1,3,1,1])
+        x = v[:,:,0,:,:]
+        y = v[:,:,1,:,:]
 
         x = self.encoder(x)
         y = self.encoder(y)

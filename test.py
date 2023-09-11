@@ -15,7 +15,9 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from utils import dot_product_attention
+from utils import dot_product_attention, combine_masks_to_segmentation
+
+from imported.labelprop import LabelPropVOS_CRW
 
 seed = 123  
 torch.manual_seed(seed)
@@ -26,15 +28,9 @@ def get_args_parser():
     # Default are from MAE (He et al. 2021)
     parser = argparse.ArgumentParser('VOS test', add_help=False)
     # Model parameters
-    parser.add_argument('--image_size', default=(512,48), type=int)
     # Loss parameters
-    
     # Training parameters
-    parser.add_argument('--epochs', default=10, type=int)
-    parser.add_argument('--lr', default=1E-5, type=float)
-    parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--datafolder',default='/data/videos/class_0') #default='./cresis_of/train/sample'
-    parser.add_argument('--savefolder',default='./radar_vos_run/') #default='./cresis_of/train/sample'
+    parser.add_argument('--datafolder',default='/data/videos/class_0') #default='/data/videos/class_0'
     return parser
 
 def main(args):
@@ -44,10 +40,13 @@ def main(args):
 
     model = RGVOS()
     model.to(device)
-    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
+    num_devices = torch.cuda.device_count()
+    if num_devices >= 2:
+        model = nn.DataParallel(model)
+    model.load_state_dict(torch.load('./trained-vos-test.pt'))
 
     # Imagenet transformation
-    normalize = transforms.Normalize(mean = 0.45, std = 0.22)
+    normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
 
     dataset = SingleVideo(args.datafolder)
     
@@ -72,36 +71,55 @@ def main(args):
     label = label.to(device)
 
     _,T,H,W = video.shape
-    seg = torch.ones(H,T*W)
+    seg = torch.zeros(H,T*W)
     seg[:,:W] = label
+
+    cfg = {
+        'CXT_SIZE' : 10, 
+        'RADIUS' : 10,
+        'TEMP' : 0.05,
+        'KNN' : 5,
+    }
+    lp = LabelPropVOS_CRW(cfg)
+    num_classes = 3
+
+    feats = []
+    masks = []
 
     for i in range(T-1):
         v = video[:,i:i+2,:,:].unsqueeze(0)
 
         # Imagenet normalization (if resnet18 is pretrained)
-        sample1 = normalize(v[:,:,0,:,:])
-        sample2 = normalize(v[:,:,1,:,:])
+        sample1 = normalize(v[:,:,0,:,:].repeat(1,3,1,1))
+        sample2 = normalize(v[:,:,1,:,:].repeat(1,3,1,1))
         v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
 
         x,y = model(v)
+        x = (x - x.mean()) / x.std()
+        y = (y - y.mean()) / y.std()
+
         fH = x.shape[2]
         fW = x.shape[3]
-        # Label propagation
-        x = x.squeeze(0)
-        y = y.squeeze(0)
-
-        A = dot_product_attention(x,y)
 
         downscale = transforms.Resize((fH,fW), interpolation=InterpolationMode.NEAREST)
         upscale = transforms.Resize((H,W), interpolation=InterpolationMode.NEAREST)
 
-        label_dw = downscale(label.unsqueeze(0)).squeeze(0).view(-1)
+        # downscale label and turn into a mask
+        label = downscale(label.unsqueeze(0)).squeeze(0)
+        ctx = torch.zeros(num_classes, fH, fW, device = device)
+        for class_idx in range(0, num_classes):
+            mask = (label == class_idx).unsqueeze(0).float()
+            ctx[class_idx, :, :] = mask
+        ctx = ctx.unsqueeze(0)
         
-        next_lbl = torch.matmul(A,label_dw.unsqueeze(1)).squeeze(1).view(fH,fW).unsqueeze(0)
-        next_lbl = upscale(next_lbl)
+        masks.append(ctx)
+        feats.append(x)
 
-        seg[:, W*(i+1):W*(i+1)+W] = next_lbl
-        label = next_lbl
+        mask = lp.predict(feats = feats, masks = masks, curr_feat = y)
+        next_lbl = combine_masks_to_segmentation(mask)
+        next_lbl = upscale(next_lbl.unsqueeze(0)).squeeze(0)
+        label = torch.round(next_lbl.squeeze(0))
+        seg[:, W*(i+1):W*(i+1)+W] = label
 
     print('--- TEST DONE ---')
     print('Saving results in lbl.png')
