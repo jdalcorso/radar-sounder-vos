@@ -15,7 +15,7 @@ from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.utils.tensorboard import SummaryWriter
-from utils import dot_product_attention
+from utils import dot_product_attention, SupConLoss
 
 seed = 123  
 torch.manual_seed(seed)
@@ -32,9 +32,10 @@ def get_args_parser():
     # Loss parameters
     
     # Training parameters
-    parser.add_argument('--epochs', default=5, type=int)
+    parser.add_argument('--epochs', default=10, type=int)
     parser.add_argument('--lr', default=1E-4, type=float)
     parser.add_argument('--batch_size', default=64, type=int)
+    parser.add_argument('--supconloss_w', default=0.01, type=float)
     parser.add_argument('--datafolder',default='/data/videos/class_0') #default='/data/videos/class_0', '/data/videos24'
     parser.add_argument('--savefolder',default='./radar_vos_run/') #default='./cresis_of/train/sample'
     return parser
@@ -65,14 +66,19 @@ def main(args):
     # Initialize optimizer
     optimizer = AdamW(params=model.parameters() ,lr = args.lr, betas=(0.9, 0.95))
     loss_fn = nn.HuberLoss()
+    loss_fn2 = SupConLoss()
 
     # Imagenet transformation
     normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792]) # Computed on videos24
     # normalize = transforms.Compose([
-    #     transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225]),
-    #     transforms.ColorJitter(brightness = 0.05, contrast = 0.05)
+    #      transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792]),
+    #      transforms.ColorJitter(brightness = 0.03, contrast = 0.03),
     # ])
 
+    one_video = SingleVideo()
+    one_video, one_map = one_video[0]
+    one_video = one_video[0,0,:,:].unsqueeze(0).unsqueeze(0).repeat(1,3,1,1)
+    one_video = normalize(one_video)
 
     # Initialize training
     print('Training on:', device)
@@ -117,6 +123,26 @@ def main(args):
                 loss += loss_fn(downscaled_sample2[i,0,...],reco)
             loss = loss/current_bs
 
+            # ---- ONE-MAP LOSS ----
+            if args.supconloss_w > 0:
+                n_feats = 512
+
+                one_video_feats = model(one_video).squeeze(0).view(n_feats,-1)
+                one_map_ds = downscale(one_map.unsqueeze(0)).squeeze(0).view(-1)
+
+                groups = torch.unique(one_map_ds)
+                grouped_features = [one_video_feats[:,one_map_ds == idx] for idx in groups]
+                sizes = [grouped_features[i].shape[1] for i in range(len(grouped_features))]
+                max_size = min(sizes)
+                grouped_features = [tensor[:, :max_size] for tensor in grouped_features]
+                features = torch.stack(grouped_features)
+                magnitude = torch.norm(features, p=2, dim = 1)
+                features_l2 = (features/(magnitude.unsqueeze(1).repeat(1,n_feats,1)+1e-5))
+                labels = torch.linspace(0,len(sizes)-1,len(sizes)).long()
+                supconloss = loss_fn2(features_l2,labels)
+                loss = loss + args.supconloss_w * supconloss
+
+            
             # Loss between true target (sample2) and recolorized one
             # loss = LOSS(sample2, ...)
             #loss = loss_fn(x,y)
@@ -129,12 +155,29 @@ def main(args):
 
         train_loss.append(torch.tensor(train_loss_epoch).mean())
         writer.add_scalar('Train Loss', train_loss[-1], epoch)
-        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item())
-        
-        writer.close()
+        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supconloss:', supconloss.item())        
+    writer.close()
 
+    one_video_feats = one_video_feats.view(n_feats,128,12)
+    # plot all 64 maps in an 8x8 squares
+    square = 8
+    ix = 1
+    plt.figure(figsize=(26,26))
+    for _ in range(square):
+        for _ in range(square):
+            # specify subplot and turn of axis
+            ax = plt.subplot(square, square, ix)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            # plot filter channel in grayscale
+            plt.imshow(one_video_feats[192+ix-1, :, :].cpu().detach(), cmap='gray')
+            ix += 1
+    # show the figure
+    plt.show()    
+    plt.savefig('lfeats.png')
+    plt.close()
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-test.pt')
+    torch.save(model.state_dict(), './trained-vos-latest.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

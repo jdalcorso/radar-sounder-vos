@@ -18,6 +18,7 @@ from torch.optim import AdamW
 from utils import dot_product_attention, combine_masks_to_segmentation
 
 from imported.labelprop import LabelPropVOS_CRW
+from sklearn.cluster import KMeans, SpectralClustering, DBSCAN
 
 seed = 123  
 torch.manual_seed(seed)
@@ -43,7 +44,7 @@ def main(args):
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
-    model.load_state_dict(torch.load('./trained-vos-test.pt'))
+    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
 
     # Imagenet transformation
     normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
@@ -66,6 +67,10 @@ def main(args):
     print('START TESTING')
     model.eval()
 
+    kmeans = KMeans(3, n_init='auto', random_state=1)
+    #kmeans = DBSCAN(eps=3,min_samples=30)
+    #kmeans = SpectralClustering(3)
+
     video, label = dataset[0]
     video = video.to(device)
     label = label.to(device)
@@ -74,11 +79,14 @@ def main(args):
     seg = torch.zeros(H,T*W)
     seg[:,:W] = label
 
+    segk = torch.zeros(H,T*W)
+    segk[:,:W] = label
+
     cfg = {
         'CXT_SIZE' : 10, 
         'RADIUS' : 10,
         'TEMP' : 0.05,
-        'KNN' : 5,
+        'KNN' : 10,
     }
     lp = LabelPropVOS_CRW(cfg)
     num_classes = 3
@@ -121,12 +129,43 @@ def main(args):
         label = torch.round(next_lbl.squeeze(0))
         seg[:, W*(i+1):W*(i+1)+W] = label
 
+        kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
+        kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(128,12)
+        kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
+        segk[:, W*(i+1):W*(i+1)+W] = kmeans_res
+
     print('--- TEST DONE ---')
     print('Saving results in lbl.png')
     plt.imshow(seg.cpu().detach())
     plt.savefig('lbl.png')
     plt.close()
 
+    plt.imshow(segk.cpu().detach())
+    plt.savefig('lblk.png')
+    plt.close()
+
+    print(x.shape)
+    one_video_feats = x.squeeze(0)
+    # plot all 64 maps in an 8x8 squares
+    square = 8
+    ix = 1
+    plt.figure(figsize=(26,26))
+    for _ in range(square):
+        for _ in range(square):
+            # specify subplot and turn of axis
+            ax = plt.subplot(square, square, ix)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            # plot filter channel in grayscale
+            plt.imshow(one_video_feats[ix-1, :, :].cpu().detach(), cmap='gray')
+            ix += 1
+    # show the figure
+    plt.show()    
+    plt.savefig('lfeats.png')
+    plt.close()
+
+    # Saving only the encoder
+    torch.save(model.state_dict(), './trained-vos-latest.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

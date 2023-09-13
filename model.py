@@ -30,18 +30,21 @@ class RGVOS(nn.Module):
                             sublayer.downsample[0].stride = (1,1)
                             sublayer.downsample[0].padding_mode = 'replicate'
 
-        #print(list(self.encoder.children()))
+        print(list(self.encoder.children()))
 
     def forward(self,v):
 
         # fc to get 3 channels
         #x = self.fc0(v[:,:,0,:,:])
         #y = self.fc0(v[:,:,1,:,:])
+        if len(v.shape)>4:
+            x = v[:,:,0,:,:]
+            y = v[:,:,1,:,:]
 
-        # repeat to get 3 channels
-        x = v[:,:,0,:,:]
-        y = v[:,:,1,:,:]
-
-        x = self.encoder(x)
-        y = self.encoder(y)
-        return x,y
+            x = self.encoder(x)
+            y = self.encoder(y)
+            return x,y
+        
+        else:
+             x = v[:,:,:,:]
+             return self.encoder(x)
