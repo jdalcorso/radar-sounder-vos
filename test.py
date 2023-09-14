@@ -28,6 +28,7 @@ np.random.seed(seed)
 def get_args_parser():
     # Default are from MAE (He et al. 2021)
     parser = argparse.ArgumentParser('VOS test', add_help=False)
+    parser.add_argument('--image_size', default=(512,48), type=int)
     # Model parameters
     # Loss parameters
     # Training parameters
@@ -49,12 +50,13 @@ def main(args):
     # Imagenet transformation
     normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
 
+    resize2resnet = transforms.Resize((224,224), antialias = True, interpolation=InterpolationMode.NEAREST)
+    resize2frame = transforms.Resize(args.image_size, antialias = True, interpolation=InterpolationMode.NEAREST)
+
     dataset = SingleVideo(args.datafolder)
     
     print('---------------------------------------------------------------')
     print('---------------------------------------------------------------')
-
-    loss_fn = nn.HuberLoss()
 
     # Initialize training
     print('Testing on:', device)
@@ -84,7 +86,7 @@ def main(args):
 
     cfg = {
         'CXT_SIZE' : 10, 
-        'RADIUS' : 10,
+        'RADIUS' : 5,
         'TEMP' : 0.05,
         'KNN' : 10,
     }
@@ -95,14 +97,20 @@ def main(args):
     masks = []
 
     for i in range(T-1):
-        v = video[:,i:i+2,:,:].unsqueeze(0)
+        print('Range-line:',i)
+        v = video[:,i:i+2,:,:].unsqueeze(0).detach()
 
         # Imagenet normalization (if resnet18 is pretrained)
         sample1 = normalize(v[:,:,0,:,:].repeat(1,3,1,1))
         sample2 = normalize(v[:,:,1,:,:].repeat(1,3,1,1))
-        v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
 
-        x,y = model(v)
+        sample1 = resize2resnet(sample1)
+        sample2 = resize2resnet(sample2)
+
+        v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
+        
+        with torch.inference_mode():
+            x,y = model(v)
         x = (x - x.mean()) / x.std()
         y = (y - y.mean()) / y.std()
 
@@ -119,7 +127,7 @@ def main(args):
             mask = (label == class_idx).unsqueeze(0).float()
             ctx[class_idx, :, :] = mask
         ctx = ctx.unsqueeze(0)
-        
+
         masks.append(ctx)
         feats.append(x)
 
@@ -130,7 +138,7 @@ def main(args):
         seg[:, W*(i+1):W*(i+1)+W] = label
 
         kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
-        kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(128,12)
+        kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(56,56)
         kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
         segk[:, W*(i+1):W*(i+1)+W] = kmeans_res
 
@@ -144,7 +152,6 @@ def main(args):
     plt.savefig('lblk.png')
     plt.close()
 
-    print(x.shape)
     one_video_feats = x.squeeze(0)
     # plot all 64 maps in an 8x8 squares
     square = 8
@@ -165,7 +172,7 @@ def main(args):
     plt.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-latest.pt')
+    torch.save(model.state_dict(), './trained-vos-resize.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

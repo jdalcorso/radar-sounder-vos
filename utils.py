@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import os
 
 def dot_product_attention(tensor_A, tensor_B):
     # Normalize
@@ -138,3 +139,11 @@ class SupConLoss(nn.Module):
         loss = loss.view(anchor_count, batch_size).mean()
 
         return loss
+
+def runid(log_folder = './mae_sounder/logs'):
+    # log_folder must onlu contain folders with name 'run_xxx'
+    listdir = os.listdir(log_folder)
+    runs = []
+    [runs.append(int(run[4:])) for run in listdir]
+    nrun = max(runs)+1
+    return 'run_'+str(nrun)
