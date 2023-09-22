@@ -8,8 +8,9 @@ import numpy as np
 import random
 import torchvision.models as models
 import matplotlib.pyplot as plt
+import ruptures as rpt
 
-from dataset import SingleVideo
+from dataset import SingleVideo, SingleVideoMCORDS1
 from model import RGVOS
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
@@ -18,6 +19,7 @@ from torch.optim import AdamW
 from utils import dot_product_attention, combine_masks_to_segmentation
 
 from imported.labelprop import LabelPropVOS_CRW
+from imported.crw import CRW
 from sklearn.cluster import KMeans, SpectralClustering, DBSCAN
 
 seed = 123  
@@ -28,11 +30,11 @@ np.random.seed(seed)
 def get_args_parser():
     # Default are from MAE (He et al. 2021)
     parser = argparse.ArgumentParser('VOS test', add_help=False)
-    parser.add_argument('--image_size', default=(512,48), type=int)
+    parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
     # Model parameters
     # Loss parameters
-    # Training parameters
-    parser.add_argument('--datafolder',default='/data/videos/class_0') #default='/data/videos/class_0'
+    # Test parameters
+    parser.add_argument('--plot_kmeans', default = True, type=bool)
     return parser
 
 def main(args):
@@ -45,16 +47,20 @@ def main(args):
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
-    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
+    model.load_state_dict(torch.load('./trained-vos-mc1.pt'))
 
-    # Imagenet transformation
-    normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
+    # Imagenet transformation and dataset according to arguments
+    if args.which_data == 0:
+        num_classes = 4
+        dataset = SingleVideoMCORDS1()
+        normalize = transforms.Normalize(mean = [0.0,0.0,0.0], std = [1.0,1.0,1.0])
+    else:
+        num_classes = 3
+        dataset = SingleVideo('/data/videos/class_0')
+        normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
 
     resize2resnet = transforms.Resize((224,224), antialias = True, interpolation=InterpolationMode.NEAREST)
-    resize2frame = transforms.Resize(args.image_size, antialias = True, interpolation=InterpolationMode.NEAREST)
 
-    dataset = SingleVideo(args.datafolder)
-    
     print('---------------------------------------------------------------')
     print('---------------------------------------------------------------')
 
@@ -66,12 +72,8 @@ def main(args):
         print('Allocated CUDA memory:',torch.cuda.memory_allocated(0)/1024**3)
 
     print('---------------------------------------------------------')
-    print('START TESTING')
+    print('--- START TESTING ---')
     model.eval()
-
-    kmeans = KMeans(3, n_init='auto', random_state=1)
-    #kmeans = DBSCAN(eps=3,min_samples=30)
-    #kmeans = SpectralClustering(3)
 
     video, label = dataset[0]
     video = video.to(device)
@@ -85,14 +87,14 @@ def main(args):
     segk[:,:W] = label
 
     cfg = {
-        'CXT_SIZE' : 10, 
-        'RADIUS' : 5,
-        'TEMP' : 0.05,
+        'CXT_SIZE' : 1, 
+        'RADIUS' : 10,
+        'TEMP' : 0.01,
         'KNN' : 10,
     }
-    lp = LabelPropVOS_CRW(cfg)
-    num_classes = 3
 
+    # Define label propagation model (from Jabri et al.)
+    lp = CRW(cfg)
     feats = []
     masks = []
 
@@ -131,16 +133,21 @@ def main(args):
         masks.append(ctx)
         feats.append(x)
 
-        mask = lp.predict(feats = feats, masks = masks, curr_feat = y)
-        next_lbl = combine_masks_to_segmentation(mask)
-        next_lbl = upscale(next_lbl.unsqueeze(0)).squeeze(0)
-        label = torch.round(next_lbl.squeeze(0))
-        seg[:, W*(i+1):W*(i+1)+W] = label
+        mask = lp.forward(feats = feats, lbls = masks)
+        mask = mask['masks_pred_idx'].to(device)
+        next_lbl = mask
+        next_lbl = upscale(next_lbl.unsqueeze(0)).squeeze(0)[-1,...]
+        seg[:, W*(i+1):W*(i+1)+W] = next_lbl
 
-        kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
-        kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(56,56)
-        kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
-        segk[:, W*(i+1):W*(i+1)+W] = kmeans_res
+        if args.plot_kmeans:
+            kmeans = KMeans(3, n_init='auto', random_state=1)
+            kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
+            kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(56,56)
+            kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
+            segk[:, W*(i+1):W*(i+1)+W] = kmeans_res
+            plt.imshow(segk.cpu().detach())
+            plt.savefig('lblk.png')
+            plt.close()
 
     print('--- TEST DONE ---')
     print('Saving results in lbl.png')
@@ -148,31 +155,7 @@ def main(args):
     plt.savefig('lbl.png')
     plt.close()
 
-    plt.imshow(segk.cpu().detach())
-    plt.savefig('lblk.png')
-    plt.close()
-
-    one_video_feats = x.squeeze(0)
-    # plot all 64 maps in an 8x8 squares
-    square = 8
-    ix = 1
-    plt.figure(figsize=(26,26))
-    for _ in range(square):
-        for _ in range(square):
-            # specify subplot and turn of axis
-            ax = plt.subplot(square, square, ix)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            # plot filter channel in grayscale
-            plt.imshow(one_video_feats[ix-1, :, :].cpu().detach(), cmap='gray')
-            ix += 1
-    # show the figure
-    plt.show()    
-    plt.savefig('lfeats.png')
-    plt.close()
-
-    # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-resize.pt')
+    
 
 if __name__ == '__main__':
     args = get_args_parser()

@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import os
+import math
+import matplotlib.pyplot as plt
 
 def dot_product_attention(tensor_A, tensor_B):
     # Normalize
@@ -140,10 +143,93 @@ class SupConLoss(nn.Module):
 
         return loss
 
-def runid(log_folder = './mae_sounder/logs'):
+def runid(log_folder = './radar_vos/logs'):
     # log_folder must onlu contain folders with name 'run_xxx'
     listdir = os.listdir(log_folder)
     runs = []
     [runs.append(int(run[4:])) for run in listdir]
     nrun = max(runs)+1
     return 'run_'+str(nrun)
+
+def positional_encoding(x, d_model):
+    """Computes the positional encoding for a given input.
+
+    Args:
+        x: A tensor of shape [batch_size, sequence_length, hidden_size].
+        d_model: The hidden size of the model.
+
+    Returns:
+        A tensor of shape [batch_size, sequence_length, hidden_size] containing the positional encoding.
+    """
+
+    pe = torch.zeros(x.size(1), d_model, device = 'cuda')
+    position = torch.arange(0, x.size(1), dtype=torch.float).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(math.log(10000.0) / d_model))
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    pe = pe.unsqueeze(0).repeat(x.size(0), 1, 1)
+    return x + pe
+
+def plot_feats(x, fts):
+    x_feats = x[0,...].view(fts,x.shape[-2],x.shape[-1]).detach()
+    square = 8
+    ix = 1
+    plt.figure(figsize=(26,26))
+    for _ in range(square):
+        for _ in range(square):
+            # specify subplot and turn of axis
+            ax = plt.subplot(square, square, ix)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            # plot filter channel in grayscale
+            plt.imshow(x_feats[192+ix-1, :, :].cpu().detach(), cmap='gray') # 192 is random
+            ix += 1
+    # show the figure
+    plt.show()    
+    plt.savefig('lfeats.png')
+
+def plot_pca(x,fts):
+    _, _, h, w = x.shape
+    x = (x-x.mean())/x.std()
+    x_feats = x[0,...].view(fts,-1).transpose(0,1)#.view(fts,56,56).detach()
+    U, S, V = torch.pca_lowrank(A = x_feats, q = 3) # q=3 to get RGB
+    U = U.transpose(0,1).view(3,h,w)
+    U = (U - U.min())/(U.max()-U.min())
+    plt.imshow(torch.permute(U,[1,2,0]).cpu().detach())
+    plt.savefig('pca.png')
+    pass
+
+
+class SobelSmoothingLoss(nn.Module):
+  def __init__(self):
+    super(SobelSmoothingLoss, self).__init__()
+
+    # Define the Sobel filter kernels
+    sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32, device = 'cuda')
+    sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32, device = 'cuda')
+
+    # Convert the Sobel filter kernels to a PyTorch convolution kernel
+    self.sobel_x = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
+    self.sobel_y = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
+
+    # Set the weights of the convolution kernels to the Sobel filter kernels
+    self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
+    self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
+    #self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0)
+    #self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0)
+
+    self.sobel_x.weight.requires_grad = False
+    self.sobel_y.weight.requires_grad = False
+
+  def forward(self, x):
+    # Compute the Sobel gradients of the input image
+    sobel_x = self.sobel_x(x)
+    sobel_y = self.sobel_y(x)
+
+    # Compute the magnitude of the Sobel gradients
+    sobel_mag = torch.sqrt(sobel_x**2 + sobel_y**2)
+
+    # Compute the smoothing loss
+    smoothing_loss = F.l1_loss(sobel_mag, torch.zeros_like(sobel_mag))
+
+    return smoothing_loss

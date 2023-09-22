@@ -10,15 +10,13 @@ class RGVOS(nn.Module):
         super().__init__()
         self.encoder_url = 'https://download.pytorch.org/models/resnet18-5c106cde.pth'
         self.encoder = torch_resnet.ResNet(block = BasicBlock, layers = [2, 2, 2, 2])
-        self.fc0 = nn.Conv2d(in_channels = 1, out_channels = 3, kernel_size = (1,1))
         state_dict = load_state_dict_from_url(self.encoder_url, model_dir = './radar_vos')
         self.encoder.load_state_dict(state_dict)
 
         encoding_layers = list(self.encoder.children())[:-2]
         self.encoder = nn.Sequential(*encoding_layers)
 
-        # Modify stride to (1, 1) everywhere in encoder layer
-        # When modifying padding, one should also modify conv2 padding
+        # Modify stride to (1, 1) everywhere in encoder layer, modify padding
         for layer in self.encoder.children():
             if isinstance(layer, nn.Conv2d):
                 layer.padding = 'same'
@@ -36,16 +34,28 @@ class RGVOS(nn.Module):
                             sublayer.downsample[0].padding_mode = 'replicate'
                             sublayer.downsample[0].padding = 'same'
 
-        print(list(self.encoder.children()))
+        # Freeze all block except the last one
+        # i = 0
+        # for layer in self.encoder:
+        #     i = i + 1
+        #     if i != 8:
+        #         for param in layer.parameters():
+        #             param.requires_grad = False
+
+        # Print total number of trainable parameters
+        num_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"Number of trainable parameters: {num_params}")
+
+        # Print specs of all layers of the encoder
+        # print(list(self.encoder.children()))
 
     def forward(self,v):
-
-        # fc to get 3 channels
-        #x = self.fc0(v[:,:,0,:,:])
-        #y = self.fc0(v[:,:,1,:,:])
         if len(v.shape)>4:
-            return self.encoder(v[:,:,0,:,:]),self.encoder(v[:,:,1,:,:])
+            v1 = self.encoder(v[:,:,0,:,:])
+            v2 = self.encoder(v[:,:,1,:,:])
+            return v1,v2
         
+        # Single image encoding
         else:
              x = v[:,:,:,:]
              return self.encoder(x)
