@@ -66,17 +66,22 @@ class SingleVideo(Dataset):
 
 
 class MCORDS1Dataset(Dataset):
-    def __init__(self, filepath ='/data/MCoRDS1_2010_DC8/RG_MCoRDS1_2010_DC8.pt', dim = (400,48)):
+    def __init__(self, filepath ='/data/MCoRDS1_2010_DC8/RG_MCoRDS1_2010_DC8.pt', dim = (400,48), factor = 1):
         self.filepath = filepath
         self.pairs = []
         t = torch.load(filepath)
         th,tw = t.shape
         n_patches = tw//dim[1]
 
-        for i in range(n_patches-1):
-            t1 = t[:dim[0],i*dim[1]:i*dim[1]+dim[1]]
-            t2 = t[:dim[0],i*dim[1]+dim[1]:i*dim[1]+2*dim[1]]
-            self.pairs.append(torch.stack([t1,t2]))
+        offsets = []
+        for i in range(factor):
+            offsets.append(dim[1]//factor*i)
+            
+        for j in range(factor):
+            for i in range(n_patches-1):
+                t1 = t[:dim[0],j+ i*dim[1]:j+ i*dim[1]+dim[1]]
+                t2 = t[:dim[0],j+ i*dim[1]+dim[1]:j+ i*dim[1]+2*dim[1]]
+                self.pairs.append(torch.stack([t1,t2]))
         print('Total pairs:', len(self.pairs))
 
     def __len__(self):

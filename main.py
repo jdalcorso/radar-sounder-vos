@@ -28,7 +28,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser('VOS pre-training', add_help=False)
     # Model parameters
     parser.add_argument('--image_size', default=(400,48), type=int) # Change this, if you change args.which_data
-    parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
+    parser.add_argument('--which_data', default = 1, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
     # Loss parameters
     parser.add_argument('--supconloss_w', default=0.1, type=float)
     parser.add_argument('--smoothloss_w', default=0.0, type=float)
@@ -65,7 +65,7 @@ def main(args):
 
     # Choose dataset, Imagenet transformation and single reference video according to arguments
     if args.which_data == 0:
-        dataset = MCORDS1Dataset()
+        dataset = MCORDS1Dataset(factor = 1)
         normalize = transforms.Normalize(mean = [0.0, 0.0, 0.0], std = [1.0, 1.0, 1.0])
         one_video = SingleVideoMCORDS1()
         one_video, one_map = one_video[0]
@@ -75,6 +75,7 @@ def main(args):
     else: 
         dataset = VideoDataset2('/data/videos/class_0') # another option is '/data/videos24'
         normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792]) # Computed on videos24
+        #normalize = transforms.Normalize(mean = [-534.5786, -534.5786, -534.5786], std = [154.9227, 154.9227, 154.9227])
         one_video = SingleVideo()
         one_video, one_map = one_video[0]
         one_video = one_video[0,0,:,:].unsqueeze(0).unsqueeze(0).repeat(1,3,1,1)
@@ -120,6 +121,10 @@ def main(args):
 
             sample1 = resize2resnet(sample1)
             sample2 = resize2resnet(sample2)
+
+            plt.imshow(sample1.cpu().detach()[0,0,...])
+            plt.savefig('sample.png')
+            plt.close()
 
             samples = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
             x,y = model(samples)
@@ -193,7 +198,7 @@ def main(args):
 
         train_loss.append(torch.tensor(train_loss_epoch).mean())
         writer.add_scalar('Train Loss', train_loss[-1], epoch)
-        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel', l3.item(), 'Time:', time.time()-t)        
+        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'Time:', time.time()-t)        
     writer.close()
 
     # Saving only the encoder
