@@ -1,4 +1,9 @@
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+import math
+import matplotlib.pyplot as plt
 
 def dot_product_attention(tensor_A, tensor_B):
     # Normalize
@@ -47,3 +52,184 @@ def combine_masks_to_segmentation(masks):
         segmentation_map += class_mask * (class_idx)  # Class labels start from 1
     
     return segmentation_map
+
+
+class SupConLoss(nn.Module):
+    """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
+    It also supports the unsupervised contrastive loss in SimCLR"""
+    def __init__(self, temperature=0.07, contrast_mode='all',
+                 base_temperature=0.07):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+        self.contrast_mode = contrast_mode
+        self.base_temperature = base_temperature
+
+    def forward(self, features, labels=None, mask=None):
+        """Compute loss for model. If both `labels` and `mask` are None,
+        it degenerates to SimCLR unsupervised loss:
+        https://arxiv.org/pdf/2002.05709.pdf
+
+        Args:
+            features: hidden vector of shape [bsz, n_views, ...].
+            labels: ground truth of shape [bsz].
+            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
+                has the same class as sample i. Can be asymmetric.
+        Returns:
+            A loss scalar.
+        """
+        device = (torch.device('cuda')
+                  if features.is_cuda
+                  else torch.device('cpu'))
+
+        if len(features.shape) < 3:
+            raise ValueError('`features` needs to be [bsz, n_views, ...],'
+                             'at least 3 dimensions are required')
+        if len(features.shape) > 3:
+            features = features.view(features.shape[0], features.shape[1], -1)
+
+        batch_size = features.shape[0]
+        if labels is not None and mask is not None:
+            raise ValueError('Cannot define both `labels` and `mask`')
+        elif labels is None and mask is None:
+            mask = torch.eye(batch_size, dtype=torch.float32).to(device)
+        elif labels is not None:
+            labels = labels.contiguous().view(-1, 1)
+            if labels.shape[0] != batch_size:
+                raise ValueError('Num of labels does not match num of features')
+            mask = torch.eq(labels, labels.T).float().to(device)
+        else:
+            mask = mask.float().to(device)
+
+        contrast_count = features.shape[1]
+        contrast_feature = torch.cat(torch.unbind(features, dim=1), dim=0)
+        if self.contrast_mode == 'one':
+            anchor_feature = features[:, 0]
+            anchor_count = 1
+        elif self.contrast_mode == 'all':
+            anchor_feature = contrast_feature
+            anchor_count = contrast_count
+        else:
+            raise ValueError('Unknown mode: {}'.format(self.contrast_mode))
+
+        # compute logits
+        anchor_dot_contrast = torch.div(
+            torch.matmul(anchor_feature, contrast_feature.T),
+            self.temperature)
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
+
+        # tile mask
+        mask = mask.repeat(anchor_count, contrast_count)
+        # mask-out self-contrast cases
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size * anchor_count).view(-1, 1).to(device),
+            0
+        )
+        mask = mask * logits_mask
+
+        # compute log_prob
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True)+ 1e-6)
+
+        # compute mean of log-likelihood over positive
+        mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
+
+        # loss
+        loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
+        loss = loss.view(anchor_count, batch_size).mean()
+
+        return loss
+
+def runid(log_folder = './radar_vos/logs'):
+    # log_folder must onlu contain folders with name 'run_xxx'
+    listdir = os.listdir(log_folder)
+    runs = []
+    [runs.append(int(run[4:])) for run in listdir]
+    nrun = max(runs)+1
+    return 'run_'+str(nrun)
+
+def positional_encoding(x, d_model):
+    """Computes the positional encoding for a given input.
+
+    Args:
+        x: A tensor of shape [batch_size, sequence_length, hidden_size].
+        d_model: The hidden size of the model.
+
+    Returns:
+        A tensor of shape [batch_size, sequence_length, hidden_size] containing the positional encoding.
+    """
+
+    pe = torch.zeros(x.size(1), d_model, device = 'cuda')
+    position = torch.arange(0, x.size(1), dtype=torch.float).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(math.log(10000.0) / d_model))
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    pe = pe.unsqueeze(0).repeat(x.size(0), 1, 1)
+    return x + pe
+
+def plot_feats(x, fts):
+    x_feats = x[0,...].view(fts,x.shape[-2],x.shape[-1]).detach()
+    square = 8
+    ix = 1
+    plt.figure(figsize=(26,26))
+    for _ in range(square):
+        for _ in range(square):
+            # specify subplot and turn of axis
+            ax = plt.subplot(square, square, ix)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            # plot filter channel in grayscale
+            plt.imshow(x_feats[192+ix-1, :, :].cpu().detach(), cmap='gray') # 192 is random
+            ix += 1
+    # show the figure
+    plt.show()    
+    plt.savefig('lfeats.png')
+
+def plot_pca(x,fts):
+    _, _, h, w = x.shape
+    x = (x-x.mean())/x.std()
+    x_feats = x[0,...].view(fts,-1).transpose(0,1)#.view(fts,56,56).detach()
+    U, S, V = torch.pca_lowrank(A = x_feats, q = 3) # q=3 to get RGB
+    U = U.transpose(0,1).view(3,h,w)
+    U = (U - U.min())/(U.max()-U.min())
+    plt.imshow(torch.permute(U,[1,2,0]).cpu().detach())
+    plt.savefig('pca.png')
+    pass
+
+
+class SobelSmoothingLoss(nn.Module):
+  def __init__(self):
+    super(SobelSmoothingLoss, self).__init__()
+
+    # Define the Sobel filter kernels
+    sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32, device = 'cuda')
+    sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32, device = 'cuda')
+
+    # Convert the Sobel filter kernels to a PyTorch convolution kernel
+    self.sobel_x = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
+    self.sobel_y = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
+
+    # Set the weights of the convolution kernels to the Sobel filter kernels
+    self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
+    self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
+    #self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0)
+    #self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0)
+
+    self.sobel_x.weight.requires_grad = False
+    self.sobel_y.weight.requires_grad = False
+
+  def forward(self, x):
+    # Compute the Sobel gradients of the input image
+    sobel_x = self.sobel_x(x)
+    sobel_y = self.sobel_y(x)
+
+    # Compute the magnitude of the Sobel gradients
+    sobel_mag = torch.sqrt(sobel_x**2 + sobel_y**2)
+
+    # Compute the smoothing loss
+    smoothing_loss = F.l1_loss(sobel_mag, torch.zeros_like(sobel_mag))
+
+    return smoothing_loss
