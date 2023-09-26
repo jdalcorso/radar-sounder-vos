@@ -14,9 +14,9 @@ from model import RGVOS
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
 from torch.utils.tensorboard import SummaryWriter
-from utils import dot_product_attention, SupConLoss, runid, positional_encoding, plot_feats, plot_pca, SobelSmoothingLoss
+from utils import dot_product_attention, SupConLoss, runid, positional_encoding, plot_feats, plot_pca, SobelSmoothingLoss, label_prop_val
 
 seed = 123  
 torch.manual_seed(seed)
@@ -28,18 +28,20 @@ def get_args_parser():
     parser = argparse.ArgumentParser('VOS pre-training', add_help=False)
     # Model parameters
     parser.add_argument('--image_size', default=(400,48), type=int) # Change this, if you change args.which_data
-    parser.add_argument('--which_data', default = 1, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
+    parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
     # Loss parameters
     parser.add_argument('--supconloss_w', default=0.1, type=float)
     parser.add_argument('--smoothloss_w', default=0.0, type=float)
+    parser.add_argument('--l2regloss_w', default=0.001, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=1, type=int)
-    parser.add_argument('--lr', default=1E-4, type=float)
+    parser.add_argument('--epochs', default=10, type=int)
+    parser.add_argument('--lr', default=1E-5, type=float)
     parser.add_argument('--batch_size', default=32, type=int)
     # Plots and folders
     parser.add_argument('--pos_encode', default = False, type = bool)
     parser.add_argument('--plot_feats', default = True, type = bool)
     parser.add_argument('--plot_pca', default = True, type = bool)
+    parser.add_argument('--validation', default = True, type = bool)
     parser.add_argument('--datafolder',default='/data/videos/class_0') #default='/data/videos/class_0', '/data/videos24'
     parser.add_argument('--savefolder',default='./radar_vos_run/') #default='./cresis_of/train/sample'
     return parser
@@ -98,9 +100,9 @@ def main(args):
     # Initialize training
     print('Training on:', device)
     if device.type == 'cuda':
-        print('Total CUDA memory:',torch.cuda.get_device_properties(0).total_memory/1024**3)
-        print('Reserved CUDA memory:',torch.cuda.memory_reserved(0)/1024**3)
-        print('Allocated CUDA memory:',torch.cuda.memory_allocated(0)/1024**3)
+        print('Total CUDA memory:',torch.cuda.get_device_properties(0).total_memory/(1024**3))
+        print('Reserved CUDA memory:',torch.cuda.memory_reserved(0)/(1024**3))
+        print('Allocated CUDA memory:',torch.cuda.memory_allocated(0)/(1024**3))
 
     print('---------------------------------------------------------')
     print('START TRAINING FOR',args.epochs,'EPOCHS')
@@ -176,6 +178,13 @@ def main(args):
                 l3 = (loss_fn3(x)+loss_fn3(y))/current_bs
                 loss = loss + args.smoothloss_w * l3
 
+            # --- L2-REGULARIZATION LOSS ---
+            regloss = torch.tensor(0, device = device, dtype = torch.float)
+            if args.l2regloss_w > 0:
+                for weight in model.parameters():
+                    regloss += torch.sum(torch.square(weight))
+                loss = loss + args.l2regloss_w * regloss
+
             # Loss between true target (sample2) and recolorized one
             optimizer.zero_grad()
             loss.backward()
@@ -198,11 +207,16 @@ def main(args):
 
         train_loss.append(torch.tensor(train_loss_epoch).mean())
         writer.add_scalar('Train Loss', train_loss[-1], epoch)
-        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'Time:', time.time()-t)        
+
+        # --- VALIDATION: LABEL PROP ---
+        if args.validation:
+            label_prop_val(model = model, which_data = 0, plot_kmeans = True, writer = writer, epoch = epoch)
+
+        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'L2 loss:', regloss.item(), 'Time:', time.time()-t)        
     writer.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-mc1.pt')
+    torch.save(model.state_dict(), './trained-vos-latest.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

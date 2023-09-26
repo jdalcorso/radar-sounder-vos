@@ -1,31 +1,22 @@
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import argparse
-import numpy as np
 import random
-import torchvision.models as models
 import matplotlib.pyplot as plt
-import ruptures as rpt
 
 from dataset import SingleVideo, SingleVideoMCORDS1
 from model import RGVOS
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
-from torch.utils.data import DataLoader
-from torch.optim import AdamW
-from utils import dot_product_attention, combine_masks_to_segmentation
 
-from imported.labelprop import LabelPropVOS_CRW
 from imported.crw import CRW
-from sklearn.cluster import KMeans, SpectralClustering, DBSCAN
+from sklearn.cluster import KMeans
 
 seed = 123  
 torch.manual_seed(seed)
 random.seed(seed)
-np.random.seed(seed)
 
 def get_args_parser():
     # Default are from MAE (He et al. 2021)
@@ -47,7 +38,7 @@ def main(args):
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
-    model.load_state_dict(torch.load('./trained-vos-mc1.pt'))
+    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
 
     # Imagenet transformation and dataset according to arguments
     if args.which_data == 0:
@@ -78,7 +69,6 @@ def main(args):
     video, label = dataset[0]
     video = video.to(device)
     label = label.to(device)
-
     _,T,H,W = video.shape
     seg = torch.zeros(H,T*W)
     seg[:,:W] = label
@@ -89,16 +79,16 @@ def main(args):
     cfg = {
         'CXT_SIZE' : 1, 
         'RADIUS' : 10,
-        'TEMP' : 0.01,
+        'TEMP' : 100.01,
         'KNN' : 10,
     }
 
     # Define label propagation model (from Jabri et al.)
-    lp = CRW(cfg)
+    lp = CRW(cfg, verbose = True)
     feats = []
     masks = []
 
-    for i in range(T-1):
+    for i in range(1,T-1):
         print('Range-line:',i)
         v = video[:,i:i+2,:,:].unsqueeze(0).detach()
 
@@ -129,22 +119,22 @@ def main(args):
             mask = (label == class_idx).unsqueeze(0).float()
             ctx[class_idx, :, :] = mask
         ctx = ctx.unsqueeze(0)
-
         masks.append(ctx)
         feats.append(x)
 
         mask = lp.forward(feats = feats, lbls = masks)
+
         mask = mask['masks_pred_idx'].to(device)
         next_lbl = mask
         next_lbl = upscale(next_lbl.unsqueeze(0)).squeeze(0)[-1,...]
-        seg[:, W*(i+1):W*(i+1)+W] = next_lbl
+        seg[:, W*i:W*i+W] = next_lbl
 
         if args.plot_kmeans:
             kmeans = KMeans(3, n_init='auto', random_state=1)
             kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
             kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(56,56)
             kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
-            segk[:, W*(i+1):W*(i+1)+W] = kmeans_res
+            segk[:, W*i:W*i+W] = kmeans_res
             plt.imshow(segk.cpu().detach())
             plt.savefig('lblk.png')
             plt.close()

@@ -12,17 +12,17 @@ import time
 class CRW(object):
 
     """Propagation algorithm"""
-    def __init__(self, cfg):
+    def __init__(self, cfg, verbose = False):
         self.n_context = cfg['CXT_SIZE']
         self.radius = cfg['RADIUS']
         self.temperature = cfg['TEMP']
         self.topk = cfg['KNN']
-
-        print("Inference Opts:")
-        print("Context size: {}".format(self.n_context))
-        print("      Radius: {}".format(self.radius))
-        print("        Temp: {}".format(self.temperature))
-        print("        TopK: {}".format(self.topk))
+        if verbose:
+            print("Inference Opts:")
+            print("Context size: {}".format(self.n_context))
+            print("      Radius: {}".format(self.radius))
+            print("        Temp: {}".format(self.temperature))
+            print("        TopK: {}".format(self.topk))
 
         # always keeping the first frame
         # TODO: move to cfg
@@ -234,7 +234,7 @@ class MaskedAttention(nn.Module):
             H = int(H**0.5)
             W = int(W**0.5)
         
-        gx, gy = torch.meshgrid(torch.arange(0, H), torch.arange(0, W))
+        gx, gy = torch.meshgrid(torch.arange(0, H), torch.arange(0, W), indexing=None)
         D = ( (gx[None, None, :, :] - gx[:, :, None, None])**2 + (gy[None, None, :, :] - gy[:, :, None, None])**2 ).float() ** 0.5
         D = (D < self.radius)[None].float()
 
