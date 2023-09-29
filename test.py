@@ -124,6 +124,10 @@ def main(args):
 
         mask = lp.forward(feats = feats, lbls = masks)
 
+        plt.imshow(mask['masks_pred_idx'][-1,:,:])
+        plt.savefig('lconf.png')
+        plt.close()
+
         mask = mask['masks_pred_idx'].to(device)
         next_lbl = mask
         next_lbl = upscale(next_lbl.unsqueeze(0)).squeeze(0)[-1,...]

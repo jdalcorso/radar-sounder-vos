@@ -34,8 +34,8 @@ def get_args_parser():
     parser.add_argument('--smoothloss_w', default=0.0, type=float)
     parser.add_argument('--l2regloss_w', default=0.001, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=10, type=int)
-    parser.add_argument('--lr', default=1E-5, type=float)
+    parser.add_argument('--epochs', default=5, type=int)
+    parser.add_argument('--lr', default=1E-4, type=float)
     parser.add_argument('--batch_size', default=32, type=int)
     # Plots and folders
     parser.add_argument('--pos_encode', default = False, type = bool)
@@ -67,7 +67,7 @@ def main(args):
 
     # Choose dataset, Imagenet transformation and single reference video according to arguments
     if args.which_data == 0:
-        dataset = MCORDS1Dataset(factor = 1)
+        dataset = MCORDS1Dataset(dim = args.image_size , factor = 1)
         normalize = transforms.Normalize(mean = [0.0, 0.0, 0.0], std = [1.0, 1.0, 1.0])
         one_video = SingleVideoMCORDS1()
         one_video, one_map = one_video[0]
@@ -210,7 +210,7 @@ def main(args):
 
         # --- VALIDATION: LABEL PROP ---
         if args.validation:
-            label_prop_val(model = model, which_data = 0, plot_kmeans = True, writer = writer, epoch = epoch)
+            label_prop_val(model = model, which_data = 0, plot_kmeans = False, writer = writer, epoch = epoch)
 
         print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'L2 loss:', regloss.item(), 'Time:', time.time()-t)        
     writer.close()

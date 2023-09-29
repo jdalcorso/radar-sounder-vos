@@ -191,7 +191,7 @@ def plot_feats(x, fts):
             ax.set_xticks([])
             ax.set_yticks([])
             # plot filter channel in grayscale
-            plt.imshow(x_feats[192+ix-1, :, :].cpu().detach(), cmap='gray') # 192 is random
+            plt.imshow(x_feats[0+ix-1, :, :].cpu().detach(), cmap='gray') # 192 is random
             ix += 1
     # show the figure
     plt.show()    
@@ -244,7 +244,7 @@ class SobelSmoothingLoss(nn.Module):
     return smoothing_loss
 
 
-def label_prop_val(model, which_data = 0, plot_kmeans = True, writer = None, epoch = None):
+def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, epoch = None):
     cudnn.benchmark = True
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
