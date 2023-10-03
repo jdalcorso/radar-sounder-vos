@@ -8,7 +8,6 @@ import torch.backends.cudnn as cudnn
 import random
 
 from dataset import SingleVideo, SingleVideoMCORDS1
-from model import RGVOS
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from imported.crw import CRW
@@ -157,7 +156,10 @@ def runid(log_folder = './radar_vos/logs'):
     listdir = os.listdir(log_folder)
     runs = []
     [runs.append(int(run[4:])) for run in listdir]
-    nrun = max(runs)+1
+    if len(runs)>0:
+        nrun = max(runs)+1
+    else:
+        nrun = 0
     return 'run_'+str(nrun)
 
 def positional_encoding(x, d_model):
@@ -244,26 +246,23 @@ class SobelSmoothingLoss(nn.Module):
     return smoothing_loss
 
 
-def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, epoch = None):
+def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, epoch = None, normalize = None, one_video = None, one_map=None):
     cudnn.benchmark = True
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Imagenet transformation and dataset according to arguments
     if which_data == 0:
         num_classes = 4
-        dataset = SingleVideoMCORDS1()
-        normalize = transforms.Normalize(mean = [0.0,0.0,0.0], std = [1.0,1.0,1.0])
     else:
         num_classes = 3
-        dataset = SingleVideo('/data/videos/class_0')
-        normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792])
 
     resize2resnet = transforms.Resize((224,224), antialias = True, interpolation=InterpolationMode.NEAREST)
 
     # Initialize testing
     model.eval()
 
-    video, label = dataset[0]
+    video = one_video
+    label = one_map
     video = video.to(device)
     label = label.to(device)
 
@@ -275,8 +274,8 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
     segk[:,:W] = label
 
     cfg = {
-        'CXT_SIZE' : 1, 
-        'RADIUS' : 10,
+        'CXT_SIZE' : 10, 
+        'RADIUS' : 2,
         'TEMP' : 0.01,
         'KNN' : 10,
     }
@@ -286,23 +285,21 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
     feats = []
     masks = []
 
-    for i in range(1,T-1):
+    for i in range(0,T-1):
         v = video[:,i:i+2,:,:].unsqueeze(0).detach()
-
-        # Imagenet normalization (if resnet18 is pretrained)
-        sample1 = normalize(v[:,:,0,:,:].repeat(1,3,1,1))
-        sample2 = normalize(v[:,:,1,:,:].repeat(1,3,1,1))
-
-        sample1 = resize2resnet(sample1)
-        sample2 = resize2resnet(sample2)
-
+        sample1 = v[:,:,0,:,:]
+        sample2 = v[:,:,1,:,:]
+            
         v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
         
         with torch.inference_mode():
-            x,y = model(v)
+            v = v.squeeze(0).squeeze(0).unsqueeze(1)
+            v = model(v)
+            x = v[0,...].unsqueeze(0)
+            y = v[1,...].unsqueeze(0)
+
         x = (x - x.mean()) / x.std()
         y = (y - y.mean()) / y.std()
-
         fH = x.shape[2]
         fW = x.shape[3]
 
@@ -310,6 +307,8 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
         upscale = transforms.Resize((H,W), interpolation=InterpolationMode.NEAREST)
 
         # downscale label and turn into a mask
+        if i !=0:
+            label = next_lbl
         label = downscale(label.unsqueeze(0)).squeeze(0)
         ctx = torch.zeros(num_classes, fH, fW, device = device)
         for class_idx in range(0, num_classes):

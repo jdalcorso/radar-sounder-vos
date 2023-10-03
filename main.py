@@ -10,7 +10,7 @@ import torchvision.models as models
 import time
 
 from dataset import VideoDataset, VideoDataset2, SingleVideo, MCORDS1Dataset, SingleVideoMCORDS1
-from model import RGVOS
+from model import CustomCNN
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
@@ -32,11 +32,11 @@ def get_args_parser():
     # Loss parameters
     parser.add_argument('--supconloss_w', default=0.1, type=float)
     parser.add_argument('--smoothloss_w', default=0.0, type=float)
-    parser.add_argument('--l2regloss_w', default=0.001, type=float)
+    parser.add_argument('--l2regloss_w', default=0.000, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=5, type=int)
-    parser.add_argument('--lr', default=1E-4, type=float)
-    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--epochs', default=30, type=int)
+    parser.add_argument('--lr', default=1E-5, type=float)
+    parser.add_argument('--batch_size', default=128, type=int)
     # Plots and folders
     parser.add_argument('--pos_encode', default = False, type = bool)
     parser.add_argument('--plot_feats', default = True, type = bool)
@@ -55,34 +55,29 @@ def main(args):
     writer = SummaryWriter('./radar_vos/logs/'+run_id)
     writer.add_text('arguments',str(args))
 
-    model = RGVOS()
+    model = CustomCNN()
     model.to(device)
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
 
-    # Standard transformations between resnet18 size and image size
-    resize2resnet = transforms.Resize((224,224), antialias = True, interpolation=InterpolationMode.NEAREST)
-    resize2frame = transforms.Resize(args.image_size, antialias = True, interpolation=InterpolationMode.NEAREST) 
-
     # Choose dataset, Imagenet transformation and single reference video according to arguments
     if args.which_data == 0:
         dataset = MCORDS1Dataset(dim = args.image_size , factor = 1)
-        normalize = transforms.Normalize(mean = [0.0, 0.0, 0.0], std = [1.0, 1.0, 1.0])
-        one_video = SingleVideoMCORDS1()
-        one_video, one_map = one_video[0]
-        one_video = one_video[0,0,:,:].unsqueeze(0).unsqueeze(0).repeat(1,3,1,1)
+        normalize = transforms.Normalize(mean = [0.0], std = [1.0])
+        one_video = SingleVideoMCORDS1(dim = args.image_size)
+        ov, one_map = one_video[0]
+        one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
         one_video = normalize(one_video)
-        one_video = resize2resnet(one_video)
+  
     else: 
         dataset = VideoDataset2('/data/videos/class_0') # another option is '/data/videos24'
-        normalize = transforms.Normalize(mean = [-458.0144, -458.0144, -458.0144], std = [56.2792, 56.2792, 56.2792]) # Computed on videos24
-        #normalize = transforms.Normalize(mean = [-534.5786, -534.5786, -534.5786], std = [154.9227, 154.9227, 154.9227])
+        normalize = transforms.Normalize(mean = [-458.0144], std = [56.2792]) # Computed on videos24
+        # normalize = transforms.Normalize(mean = [-534.5786, -534.5786, -534.5786], std = [154.9227, 154.9227, 154.9227])
         one_video = SingleVideo()
-        one_video, one_map = one_video[0]
-        one_video = one_video[0,0,:,:].unsqueeze(0).unsqueeze(0).repeat(1,3,1,1)
+        ov, one_map = one_video[0]
+        one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
         one_video = normalize(one_video)
-        one_video = resize2resnet(one_video)
 
     dataloader = DataLoader(dataset,
                             batch_size=args.batch_size,
@@ -116,20 +111,21 @@ def main(args):
         # Batch train loop
         for batch, (samples, _) in enumerate(dataloader):
             samples = samples.to(device)
-            current_bs = samples.shape[0]
-            # Imagenet normalization (if resnet18 is pretrained)
-            sample1 = normalize(samples[:,:,0,:,:].repeat(1,3,1,1))
-            sample2 = normalize(samples[:,:,1,:,:].repeat(1,3,1,1))
+            sample1 = samples[:,:,0,:,:]
+            sample2 = samples[:,:,1,:,:]
+            sample1 = normalize(sample1)
+            sample2 = normalize(sample2)
 
-            sample1 = resize2resnet(sample1)
-            sample2 = resize2resnet(sample2)
+            current_bs = samples.shape[0]
 
             plt.imshow(sample1.cpu().detach()[0,0,...])
             plt.savefig('sample.png')
             plt.close()
 
             samples = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
-            x,y = model(samples)
+            x = model(sample1)
+            y = model(sample2)
+
             bsz, fts, h, w = x.shape
 
             # --- POSITIONAL ENCODING ---
@@ -204,19 +200,18 @@ def main(args):
             plot_pca(x,fts)
             writer.add_figure('PCA-3', plt.gcf(), epoch)
             plt.close()
-
         train_loss.append(torch.tensor(train_loss_epoch).mean())
         writer.add_scalar('Train Loss', train_loss[-1], epoch)
 
         # --- VALIDATION: LABEL PROP ---
         if args.validation:
-            label_prop_val(model = model, which_data = 0, plot_kmeans = False, writer = writer, epoch = epoch)
+            label_prop_val(model = model, which_data = 0, plot_kmeans = False, writer = writer, epoch = epoch, normalize = normalize, one_video = ov, one_map=one_map)
 
         print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'L2 loss:', regloss.item(), 'Time:', time.time()-t)        
     writer.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-latest.pt')
+    torch.save(model.state_dict(), './trained-vos-s.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()
