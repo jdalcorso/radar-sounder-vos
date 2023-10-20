@@ -105,3 +105,31 @@ class SingleVideoMCORDS1(Dataset):
     
     def __getitem__(self,index):
         return self.video, self.label[:self.dim[0],:self.dim[1]]
+
+class TestDataset(Dataset):
+    # return rg, sg with dimension (dim[0],npatches*dim[1])
+    def __init__(self, filepath = '/data/MCoRDS1_2010_DC8/', dim = (400,48), npatches = 28):
+        self.filepath = filepath
+        self.dim = dim
+        self.npatches = npatches
+        self.rg = torch.load(filepath+'/RG2_MCoRDS1_2010_DC8.pt')[:dim[0],:]
+        self.sg = torch.load(filepath+'/SG2_MCoRDS1_2010_DC8.pt')[:dim[0],:]
+        self.nrg = self.rg.shape[1]//(self.dim[1]*self.npatches)
+
+        # Trim exceeding dataset
+        self.rg = self.rg[:,:self.nrg*self.npatches*self.dim[1]]
+        self.sg = self.sg[:,:self.nrg*self.npatches*self.dim[1]]
+
+        print('Tot test dataset dimension:',self.rg.shape)
+        print('Single radargram length:', self.dim[1]*self.npatches)
+        print('Number of radargrams:', self.nrg)
+
+    def __len__(self):
+        return self.nrg
+
+    def __getitem__(self, index):
+        dim = self.dim
+        np = self.npatches
+        rg = self.rg[:,index*(np*dim[1]) : index*(np*dim[1]) + (np*dim[1])]
+        sg = self.sg[:,index*(np*dim[1]) : index*(np*dim[1]) + (np*dim[1])]
+        return rg, sg

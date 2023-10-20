@@ -256,8 +256,6 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
     else:
         num_classes = 3
 
-    resize2resnet = transforms.Resize((224,224), antialias = True, interpolation=InterpolationMode.NEAREST)
-
     # Initialize testing
     model.eval()
 
@@ -286,22 +284,15 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
     masks = []
 
     for i in range(0,T-1):
-        v = video[:,i:i+2,:,:].unsqueeze(0).detach()
-        sample1 = v[:,:,0,:,:]
-        sample2 = v[:,:,1,:,:]
-            
-        v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
+        v = video[:,i,:,:].unsqueeze(0).unsqueeze(0).detach()
+        sample = v[:,:,0,:,:]
+        sample = normalize(v[:,:,0,:,:])    
         
         with torch.inference_mode():
-            v = v.squeeze(0).squeeze(0).unsqueeze(1)
-            v = model(v)
-            x = v[0,...].unsqueeze(0)
-            y = v[1,...].unsqueeze(0)
-
+            x = model(sample)
         x = (x - x.mean()) / x.std()
-        y = (y - y.mean()) / y.std()
-        fH = x.shape[2]
-        fW = x.shape[3]
+        
+        _, nf, fH, fW = x.shape 
 
         downscale = transforms.Resize((fH,fW), interpolation=InterpolationMode.NEAREST)
         upscale = transforms.Resize((H,W), interpolation=InterpolationMode.NEAREST)
@@ -326,10 +317,10 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
 
         if plot_kmeans:
             kmeans = KMeans(3, n_init='auto', random_state=1)
-            kmeans_feats = torch.permute(y.squeeze(0).view(512,-1).cpu().detach(),[1,0])
-            kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(56,56)
+            kmeans_feats = torch.permute(x.squeeze(0).view(nf,-1).cpu().detach(),[1,0])
+            kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(x.shape[-2],x.shape[-1])
             kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
-            segk[:, W*i:W*i+W] = kmeans_res            
+            segk[:, W*i:W*i+W] = kmeans_res
             plt.imshow(segk.cpu().detach())
             plt.savefig('lblk.png')
             plt.close()

@@ -10,7 +10,7 @@ import torchvision.models as models
 import time
 
 from dataset import VideoDataset, VideoDataset2, SingleVideo, MCORDS1Dataset, SingleVideoMCORDS1
-from model import CustomCNN
+from model import CustomCNN, MobileCNN
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
@@ -31,11 +31,10 @@ def get_args_parser():
     parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
     # Loss parameters
     parser.add_argument('--supconloss_w', default=0.1, type=float)
-    parser.add_argument('--smoothloss_w', default=0.0, type=float)
     parser.add_argument('--l2regloss_w', default=0.000, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=30, type=int)
-    parser.add_argument('--lr', default=1E-5, type=float)
+    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--lr', default=1E-4, type=float)
     parser.add_argument('--batch_size', default=128, type=int)
     # Plots and folders
     parser.add_argument('--pos_encode', default = False, type = bool)
@@ -168,12 +167,6 @@ def main(args):
                 supconloss = loss_fn2(features_l2,labels)
                 loss = loss + args.supconloss_w * supconloss
 
-            # --- SMOOTHING LOSS ---
-            l3 = torch.tensor(0)
-            if args.smoothloss_w > 0:
-                l3 = (loss_fn3(x)+loss_fn3(y))/current_bs
-                loss = loss + args.smoothloss_w * l3
-
             # --- L2-REGULARIZATION LOSS ---
             regloss = torch.tensor(0, device = device, dtype = torch.float)
             if args.l2regloss_w > 0:
@@ -207,11 +200,11 @@ def main(args):
         if args.validation:
             label_prop_val(model = model, which_data = 0, plot_kmeans = False, writer = writer, epoch = epoch, normalize = normalize, one_video = ov, one_map=one_map)
 
-        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'Sobel loss:', l3.item(), 'L2 loss:', regloss.item(), 'Time:', time.time()-t)        
+        print('Epoch',epoch+1,'- Train loss:', train_loss[-1].item(), 'Supcon loss:', supconloss.item(), 'L2 loss:', regloss.item(), 'Time:', time.time()-t)        
     writer.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-s.pt')
+    torch.save(model.state_dict(), './trained-vos-latest.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

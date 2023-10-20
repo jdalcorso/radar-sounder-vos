@@ -26,7 +26,9 @@ def get_args_parser():
     # Label-prop parameters
     # Loss parameters
     # Test parameters
-    parser.add_argument('--plot_kmeans', default = True, type=bool)
+    parser.add_argument('--plot_kmeans', default = False, type=bool)
+    parser.add_argument('--append_color', default = True, type = bool)
+    parser.add_argument('--append_posv', default = True, type = bool)
     return parser
 
 def main(args):
@@ -39,7 +41,7 @@ def main(args):
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
-    model.load_state_dict(torch.load('./trained-vos-s.pt'))
+    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
 
     # Imagenet transformation and dataset according to arguments
     if args.which_data == 0:
@@ -77,9 +79,9 @@ def main(args):
     segk[:,:W] = label
 
     cfg = {
-        'CXT_SIZE' : 1, 
+        'CXT_SIZE' : 10, 
         'RADIUS' : 10,
-        'TEMP' : 0.01,
+        'TEMP' : 10.01,
         'KNN' : 10,
     }
 
@@ -90,22 +92,14 @@ def main(args):
 
     for i in range(0,T-1):
         print('Range-line:',i)
-        v = video[:,i:i+2,:,:].unsqueeze(0).detach()
-        sample1 = v[:,:,0,:,:]
-        sample2 = v[:,:,1,:,:]
+        v = video[:,i,:,:].unsqueeze(0).unsqueeze(0).detach()
+        sample = v[:,:,0,:,:]
+        sample = normalize(v[:,:,0,:,:])
 
-        sample1 = normalize(v[:,:,0,:,:])
-        sample2 = normalize(v[:,:,1,:,:])
-
-        v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
+        #v = torch.cat([sample1.unsqueeze(2), sample2.unsqueeze(2)], dim=2)
         with torch.inference_mode():
-            v = v.squeeze(0).squeeze(0).unsqueeze(1)
-            v = model(v)
-            x = v[0,...].unsqueeze(0)
-            y = v[1,...].unsqueeze(0)
-
+            x = model(sample)
         x = (x - x.mean()) / x.std()
-        y = (y - y.mean()) / y.std()
 
         _, nf, fH, fW = x.shape 
 
@@ -122,6 +116,19 @@ def main(args):
             mask = (label == class_idx).unsqueeze(0).float()
             ctx[class_idx, :, :] = mask
         ctx = ctx.unsqueeze(0)
+
+        # Add posenc
+        if args.append_posv:
+            p = torch.linspace(-1,1,100).unsqueeze(0).transpose(0,1)
+            p = p.repeat(1,12).unsqueeze(0).unsqueeze(0).cuda()
+            x = torch.cat([x,p],dim = 1)
+
+        # Add color
+        if args.append_color:
+            sample = downscale(sample)
+            x = torch.cat([x,sample],dim = 1)
+
+
         masks.append(ctx)
         feats.append(x)
         mask = lp.forward(feats = feats, lbls = masks)
@@ -137,8 +144,8 @@ def main(args):
 
         if args.plot_kmeans:
             kmeans = KMeans(3, n_init='auto', random_state=1)
-            kmeans_feats = torch.permute(y.squeeze(0).view(nf,-1).cpu().detach(),[1,0])
-            kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(y.shape[-2],y.shape[-1])
+            kmeans_feats = torch.permute(x.squeeze(0).view(nf,-1).cpu().detach(),[1,0])
+            kmeans_res = torch.tensor(kmeans.fit(kmeans_feats).labels_).view(x.shape[-2],x.shape[-1])
             kmeans_res = upscale(kmeans_res.unsqueeze(0)).squeeze(0)
             segk[:, W*i:W*i+W] = kmeans_res
             plt.imshow(segk.cpu().detach())
