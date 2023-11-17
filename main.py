@@ -9,8 +9,8 @@ import random
 import torchvision.models as models
 import time
 
-from dataset import VideoDataset, VideoDataset2, SingleVideo, MCORDS1Dataset, SingleVideoMCORDS1
-from model import CustomCNN, MobileCNN
+from dataset import VideoDataset, SingleVideo, MCORDS1Dataset, SingleVideoMCORDS1, MCORDS1Miguel
+from model import CustomCNN, CustomCNN2, CustomCNN3
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
@@ -28,14 +28,15 @@ def get_args_parser():
     parser = argparse.ArgumentParser('VOS pre-training', add_help=False)
     # Model parameters
     parser.add_argument('--image_size', default=(400,48), type=int) # Change this, if you change args.which_data
-    parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
+    parser.add_argument('--which_data', default = 2, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
     # Loss parameters
-    parser.add_argument('--supconloss_w', default=0.1, type=float)
+    parser.add_argument('--huber', default = False, type = bool)
+    parser.add_argument('--supconloss_w', default=0.0, type=float)
     parser.add_argument('--l2regloss_w', default=0.000, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=50, type=int)
+    parser.add_argument('--epochs', default=1, type=int)
     parser.add_argument('--lr', default=1E-4, type=float)
-    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--batch_size', default=256, type=int)
     # Plots and folders
     parser.add_argument('--pos_encode', default = False, type = bool)
     parser.add_argument('--plot_feats', default = True, type = bool)
@@ -69,11 +70,19 @@ def main(args):
         one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
         one_video = normalize(one_video)
   
-    else: 
-        dataset = VideoDataset2('/data/videos/class_0') # another option is '/data/videos24'
+    if args.which_data == 1:
+        dataset = VideoDataset('/data/videos/class_0') # another option is '/data/videos24'
         normalize = transforms.Normalize(mean = [-458.0144], std = [56.2792]) # Computed on videos24
         # normalize = transforms.Normalize(mean = [-534.5786, -534.5786, -534.5786], std = [154.9227, 154.9227, 154.9227])
         one_video = SingleVideo()
+        ov, one_map = one_video[0]
+        one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
+        one_video = normalize(one_video)
+
+    if args.which_data == 2:
+        dataset = MCORDS1Miguel(dim = (1248,24))
+        normalize = transforms.Normalize(mean = [0.0], std = [1.0])
+        one_video = SingleVideoMCORDS1(dim = args.image_size)
         ov, one_map = one_video[0]
         one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
         one_video = normalize(one_video)
@@ -87,7 +96,10 @@ def main(args):
 
     # Initialize optimizer
     optimizer = AdamW(params=model.parameters() ,lr = args.lr, betas=(0.9, 0.95))
-    loss_fn = nn.HuberLoss()
+    if args.huber:
+        loss_fn = nn.HuberLoss()
+    else:
+        loss_fn = nn.MSELoss()
     loss_fn2 = SupConLoss()
     loss_fn3 = SobelSmoothingLoss()
 
@@ -204,7 +216,7 @@ def main(args):
     writer.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-latest.pt')
+    torch.save(model.state_dict(), './trained-vos-miguel.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

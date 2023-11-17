@@ -183,7 +183,7 @@ def positional_encoding(x, d_model):
 
 def plot_feats(x, fts):
     x_feats = x[0,...].view(fts,x.shape[-2],x.shape[-1]).detach()
-    square = 8
+    square = 4
     ix = 1
     plt.figure(figsize=(26,26))
     for _ in range(square):
@@ -196,7 +196,8 @@ def plot_feats(x, fts):
             plt.imshow(x_feats[0+ix-1, :, :].cpu().detach(), cmap='gray') # 192 is random
             ix += 1
     # show the figure
-    plt.show()    
+    plt.show()   
+    plt.tight_layout() 
     plt.savefig('lfeats.png')
 
 def plot_pca(x,fts):
@@ -272,10 +273,10 @@ def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, ep
     segk[:,:W] = label
 
     cfg = {
-        'CXT_SIZE' : 10, 
-        'RADIUS' : 2,
-        'TEMP' : 0.01,
-        'KNN' : 10,
+        'CXT_SIZE' : 20, 
+        'RADIUS' : 11,
+        'TEMP' : 10.00,
+        'KNN' : 60,
     }
 
     # Define label propagation model (from Jabri et al.)
