@@ -36,31 +36,6 @@ def dot_product_attention(tensor_A, tensor_B):
     #return attended_features_A
     return attention_weights
 
-def combine_masks_to_segmentation(masks):
-    """
-    Combines binary masks for each class into a segmentation map.
-
-    Args:
-        masks (Tensor): Tensor of masks with dimensions [batch_size, num_classes, H, W],
-                        where each channel contains a binary mask for a class.
-
-    Returns:
-        segmentation_map (Tensor): Combined segmentation map with dimensions [batch_size, H, W],
-                                   where each pixel contains the class label (1, 2, ..., num_classes).
-    """
-    # Get the number of classes and batch size
-    batch_size, num_classes, H, W = masks.size()
-    
-    # Initialize an empty tensor for the segmentation map
-    segmentation_map = torch.zeros(batch_size, H, W, device = 'cuda')
-    
-    # Iterate over each class and assign class labels to pixels in the segmentation map
-    for class_idx in range(num_classes):
-        class_mask = masks[:, class_idx, :, :]
-        segmentation_map += class_mask * (class_idx)  # Class labels start from 1
-    
-    return segmentation_map
-
 
 class SupConLoss(nn.Module):
     """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
@@ -73,18 +48,6 @@ class SupConLoss(nn.Module):
         self.base_temperature = base_temperature
 
     def forward(self, features, labels=None, mask=None):
-        """Compute loss for model. If both `labels` and `mask` are None,
-        it degenerates to SimCLR unsupervised loss:
-        https://arxiv.org/pdf/2002.05709.pdf
-
-        Args:
-            features: hidden vector of shape [bsz, n_views, ...].
-            labels: ground truth of shape [bsz].
-            mask: contrastive mask of shape [bsz, bsz], mask_{i,j}=1 if sample j
-                has the same class as sample i. Can be asymmetric.
-        Returns:
-            A loss scalar.
-        """
         device = (torch.device('cuda')
                   if features.is_cuda
                   else torch.device('cpu'))
@@ -162,17 +125,8 @@ def runid(log_folder = './radar_vos/logs'):
         nrun = 0
     return 'run_'+str(nrun)
 
+
 def positional_encoding(x, d_model):
-    """Computes the positional encoding for a given input.
-
-    Args:
-        x: A tensor of shape [batch_size, sequence_length, hidden_size].
-        d_model: The hidden size of the model.
-
-    Returns:
-        A tensor of shape [batch_size, sequence_length, hidden_size] containing the positional encoding.
-    """
-
     pe = torch.zeros(x.size(1), d_model, device = 'cuda')
     position = torch.arange(0, x.size(1), dtype=torch.float).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * -(math.log(10000.0) / d_model))
@@ -180,6 +134,7 @@ def positional_encoding(x, d_model):
     pe[:, 1::2] = torch.cos(position * div_term)
     pe = pe.unsqueeze(0).repeat(x.size(0), 1, 1)
     return x + pe
+
 
 def plot_feats(x, fts):
     x_feats = x[0,...].view(fts,x.shape[-2],x.shape[-1]).detach()
@@ -209,43 +164,6 @@ def plot_pca(x,fts):
     U = (U - U.min())/(U.max()-U.min())
     plt.imshow(torch.permute(U,[1,2,0]).cpu().detach())
     plt.savefig('pca.png')
-    pass
-
-
-class SobelSmoothingLoss(nn.Module):
-  def __init__(self):
-    super(SobelSmoothingLoss, self).__init__()
-
-    # Define the Sobel filter kernels
-    sobel_x = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32, device = 'cuda')
-    sobel_y = torch.tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]], dtype=torch.float32, device = 'cuda')
-
-    # Convert the Sobel filter kernels to a PyTorch convolution kernel
-    self.sobel_x = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
-    self.sobel_y = nn.Conv2d(in_channels = 512, out_channels = 512, kernel_size = (3,3), padding=1, bias=False, groups=1, device = 'cuda')
-
-    # Set the weights of the convolution kernels to the Sobel filter kernels
-    self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
-    self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0).repeat([512,512,3,3])
-    #self.sobel_x.weight.data = sobel_x.unsqueeze(0).unsqueeze(0)
-    #self.sobel_y.weight.data = sobel_y.unsqueeze(0).unsqueeze(0)
-
-    self.sobel_x.weight.requires_grad = False
-    self.sobel_y.weight.requires_grad = False
-
-  def forward(self, x):
-    # Compute the Sobel gradients of the input image
-    sobel_x = self.sobel_x(x)
-    sobel_y = self.sobel_y(x)
-
-    # Compute the magnitude of the Sobel gradients
-    sobel_mag = torch.sqrt(sobel_x**2 + sobel_y**2)
-
-    # Compute the smoothing loss
-    smoothing_loss = F.l1_loss(sobel_mag, torch.zeros_like(sobel_mag))
-
-    return smoothing_loss
-
 
 def label_prop_val(model, which_data = 0, plot_kmeans = False, writer = None, epoch = None, normalize = None, one_video = None, one_map=None):
     cudnn.benchmark = True

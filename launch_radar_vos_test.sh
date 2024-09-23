@@ -1,0 +1,2 @@
+docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -t -e PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python --name jordydc --rm -u $(id -u):$(id -g) -v $(pwd):$(pwd) -v /media/datapart/jordydalcorso:/data  -w $(pwd) jordy:latest python \
+ radar_vos/test_all.py

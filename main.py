@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import argparse
 import numpy as np
 import random
-import torchvision.models as models
 import time
 
 from dataset import VideoDataset, SingleVideo, MCORDS1Dataset, SingleVideoMCORDS1, MCORDS1Miguel
@@ -14,9 +12,9 @@ from model import CustomCNN, CustomCNN2, CustomCNN3
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 from torch.utils.data import DataLoader
-from torch.optim import AdamW, SGD
+from torch.optim import AdamW
 from torch.utils.tensorboard import SummaryWriter
-from utils import dot_product_attention, SupConLoss, runid, positional_encoding, plot_feats, plot_pca, SobelSmoothingLoss, label_prop_val
+from utils import dot_product_attention, SupConLoss, runid, positional_encoding, plot_feats, plot_pca, label_prop_val
 
 seed = 123  
 torch.manual_seed(seed)
@@ -28,13 +26,13 @@ def get_args_parser():
     parser = argparse.ArgumentParser('VOS pre-training', add_help=False)
     # Model parameters
     parser.add_argument('--image_size', default=(400,48), type=int) # Change this, if you change args.which_data
-    parser.add_argument('--which_data', default = 2, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
+    parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for MCORDS3 ds')
     # Loss parameters
     parser.add_argument('--huber', default = False, type = bool)
     parser.add_argument('--supconloss_w', default=0.0, type=float)
     parser.add_argument('--l2regloss_w', default=0.000, type=float)
     # Training parameters
-    parser.add_argument('--epochs', default=1, type=int)
+    parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--lr', default=1E-4, type=float)
     parser.add_argument('--batch_size', default=256, type=int)
     # Plots and folders
@@ -42,8 +40,8 @@ def get_args_parser():
     parser.add_argument('--plot_feats', default = True, type = bool)
     parser.add_argument('--plot_pca', default = True, type = bool)
     parser.add_argument('--validation', default = True, type = bool)
-    parser.add_argument('--datafolder',default='/data/videos/class_0') #default='/data/videos/class_0', '/data/videos24'
-    parser.add_argument('--savefolder',default='./radar_vos_run/') #default='./cresis_of/train/sample'
+    parser.add_argument('--datafolder',default='/data/videos/class_0')
+    parser.add_argument('--savefolder',default='./radar_vos_run/')
     return parser
 
 def main(args):
@@ -71,9 +69,8 @@ def main(args):
         one_video = normalize(one_video)
   
     if args.which_data == 1:
-        dataset = VideoDataset('/data/videos/class_0') # another option is '/data/videos24'
-        normalize = transforms.Normalize(mean = [-458.0144], std = [56.2792]) # Computed on videos24
-        # normalize = transforms.Normalize(mean = [-534.5786, -534.5786, -534.5786], std = [154.9227, 154.9227, 154.9227])
+        dataset = VideoDataset('/data/videos/class_0')
+        normalize = transforms.Normalize(mean = [-458.0144], std = [56.2792])
         one_video = SingleVideo()
         ov, one_map = one_video[0]
         one_video = ov[0,0,:,:].unsqueeze(0).unsqueeze(0)
@@ -101,7 +98,6 @@ def main(args):
     else:
         loss_fn = nn.MSELoss()
     loss_fn2 = SupConLoss()
-    loss_fn3 = SobelSmoothingLoss()
 
     # Initialize training
     print('Training on:', device)
@@ -216,7 +212,7 @@ def main(args):
     writer.close()
 
     # Saving only the encoder
-    torch.save(model.state_dict(), './trained-vos-miguel.pt')
+    torch.save(model.state_dict(), './trained-vos.pt')
 
 if __name__ == '__main__':
     args = get_args_parser()

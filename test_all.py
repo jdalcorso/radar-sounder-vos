@@ -1,11 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 import matplotlib.pyplot as plt
 import argparse
-import random
-import matplotlib.pyplot as plt
 import time
 
 from dataset import TestDataset
@@ -41,7 +38,7 @@ def main(args):
     num_devices = torch.cuda.device_count()
     if num_devices >= 2:
         model = nn.DataParallel(model)
-    model.load_state_dict(torch.load('./trained-vos-mse.pt'))
+    model.load_state_dict(torch.load('./trained-vos-latest.pt'))
 
     num_classes = 4
     dataset = TestDataset()
@@ -121,11 +118,11 @@ def main(args):
 
             if i%24==0:
                 fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
-                ax1.imshow(seg)
-                ax2.imshow(sg)
+                ax1.imshow(seg,interpolation="nearest")
+                ax2.imshow(sg, interpolation="nearest")
                 ax3.imshow(rg)
                 plt.tight_layout()
-                plt.savefig('seg.png')
+                plt.savefig('./radar_vos/output/'+str(t)+'seg.pdf', format = 'pdf', dpi = 100, bbox_inches='tight')
                 plt.close()
 
         seg_list.append(seg)

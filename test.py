@@ -20,12 +20,8 @@ torch.manual_seed(seed)
 random.seed(seed)
 
 def get_args_parser():
-    # Default are from MAE (He et al. 2021)
     parser = argparse.ArgumentParser('VOS test', add_help=False)
     parser.add_argument('--which_data', default = 0, type=int, help = '0 for MCORDS1_2010, 1 for Miguel ds')
-    # Label-prop parameters
-    # Loss parameters
-    # Test parameters
     parser.add_argument('--plot_kmeans', default = False, type=bool)
     parser.add_argument('--append_color', default = True, type = bool)
     parser.add_argument('--append_posv', default = True, type = bool)

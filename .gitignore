@@ -1,3 +1,5 @@
 *.pyc
 events*
 *.pth
+*.png
+*.pdf
