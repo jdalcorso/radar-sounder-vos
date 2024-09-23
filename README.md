@@ -11,7 +11,7 @@ To run inference, use:
 ```
 python test.py
 ```
-
+For issues, inquiries or clarifications, please write to jordy.dalcorso@unitn.it.
 
 
 If you use the code or find it helpful, please cite the following paper:
