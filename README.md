@@ -1,4 +1,5 @@
 # Radargrams as Sequences: A Method for The Semantic Segmentation of Radar Sounder Data
+### Author: Jordy Dal Corso, RSLab@UniTN
 This repository contains scratch code for the paper [Radargrams as Sequences](https://ieeexplore.ieee.org/document/10641860), which was presented at [IGARSS 2024](https://www.2024.ieeeigarss.org), Athens, Greece.
 
 The code contains a propotype of the presented work and readers could find it helpful to obtain a grasp of the idea behind the paper.
